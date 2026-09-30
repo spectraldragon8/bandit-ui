@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         customUI
 // @namespace    https://bandit.rip/
-// @version      5.0.0
+// @version      5.0.1
 // @description  customUI for Bandit.RIP: brush-stroke menu, animated scenes, profile hub with medals, a mod menu, and a restyle of every sub-page. Scenes and mods load from GitHub. Alt+G toggles it.
-// @homepageURL  https://github.com/spectraldragon8/bandit-ui
-// @updateURL    https://raw.githubusercontent.com/spectraldragon8/bandit-ui/main/customui.user.js
-// @downloadURL  https://raw.githubusercontent.com/spectraldragon8/bandit-ui/main/customui.user.js
+// @homepageURL  https://github.com/spectraldragon8/bandit-ui/tree/main/bandit-ui
+// @updateURL    https://raw.githubusercontent.com/spectraldragon8/bandit-ui/main/bandit-ui/customui.user.js
+// @downloadURL  https://raw.githubusercontent.com/spectraldragon8/bandit-ui/main/bandit-ui/customui.user.js
 // @match        https://bandit.rip/*
 // @match        https://*.bandit.rip/*
 // @run-at       document-start
@@ -36,7 +36,7 @@
     loadTimeout: 20000,      // loading screen gives up waiting after this many ms
     minLoadMs: 1400,         // keep the loading screen up at least this long
     // the GitHub repo: themes/ holds themes.txt + *.theme, mods/ holds mods.txt + *.js, assets/ holds images
-    repoBase:  'https://raw.githubusercontent.com/spectraldragon8/bandit-ui/main/',
+    repoBase:  'https://raw.githubusercontent.com/spectraldragon8/bandit-ui/main/bandit-ui/',
     get themeBase() { return this.repoBase + 'themes/'; },
     get modBase()   { return this.repoBase + 'mods/'; },
   };
