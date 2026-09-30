@@ -1,1 +1,2 @@
 ShadowClient : shadowclient : Training tools: damage numbers, HP display, hitboxes, cooldown timers, combo counter, dummy and map options. Press / in game for its menu.
+Community Costumes : ccostumes : Allows custom costumes to be equipped and tried. Made by Dokuro
