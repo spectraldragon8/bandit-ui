@@ -1,0 +1,339 @@
+// The Hotel — scene for the Bandit.RIP menu userscript.
+// Moonlit grand hotel: starry sky, shooting stars, guests switching lights on and off, garden lamps, fireflies.
+//
+// Theme contract (the engine calls these):
+//   build(env)          on start and on every resize; pre-render here
+//   drawBack(t, dt)     draws everything behind the katana
+//   drawFront(t, dt)    draws everything in front of the grass
+//   grass: [top, bottom, back]   colours for the swaying grass
+// env gives you: ctx, W, H, DPR, t, parX, parY, off(w, h) → [canvas, ctx], config, tier, gold,
+// and env.flash (set it 0…1 to light up the katana and screen).
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+let E, W = 0, H = 0;
+let hSky = null, hFore = null, layer = null, hotelLit = null;
+let hStars = [], hWins = [], hLamps = [], flies = [], shooters = [];
+let nextVolley = 0, nextSingle = 0;
+
+function buildHotelSky() {
+  const [c, x] = E.off(W, H);
+  const g = x.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#030716'); g.addColorStop(.35, '#0a1633'); g.addColorStop(.62, '#1a2f5c');
+  g.addColorStop(.8, '#24386a'); g.addColorStop(1, '#0b1120');
+  x.fillStyle = g; x.fillRect(0, 0, W, H);
+  // moonlight bloom behind the trees on the left
+  const m = x.createRadialGradient(W * .05, H * .38, 0, W * .05, H * .38, W * .5);
+  m.addColorStop(0, 'rgba(215,230,255,.6)'); m.addColorStop(.22, 'rgba(150,185,255,.22)'); m.addColorStop(1, 'rgba(120,160,255,0)');
+  x.fillStyle = m; x.fillRect(0, 0, W, H);
+  // faint milky band
+  x.save(); x.translate(W * .55, H * .18); x.rotate(-.35);
+  const band = x.createLinearGradient(0, -H * .13, 0, H * .13);
+  band.addColorStop(0, 'rgba(160,190,255,0)'); band.addColorStop(.5, 'rgba(160,190,255,.08)'); band.addColorStop(1, 'rgba(160,190,255,0)');
+  x.fillStyle = band; x.fillRect(-W, -H * .13, W * 2, H * .26);
+  x.restore();
+  // star field
+  const n = Math.floor(W * H / 2400);
+  for (let i = 0; i < n; i++) {
+    const sx = rnd(0, W), sy = H * .66 * Math.pow(Math.random(), 1.5);
+    x.fillStyle = `rgba(${rnd(200, 235) | 0},${rnd(215, 240) | 0},255,${rnd(.25, .9)})`;
+    x.beginPath(); x.arc(sx, sy, rnd(.3, 1.1), 0, 6.29); x.fill();
+  }
+  hStars = [];
+  for (let i = 0; i < 160; i++) {
+    hStars.push({ x: rnd(0, W), y: H * .55 * Math.pow(Math.random(), 1.3), r: rnd(.9, 2), ph: rnd(0, 6.28), sp: rnd(1, 3.5), flare: Math.random() < .3 });
+  }
+  return c;
+}
+
+function palm(x, bx, by, h, lean, col) {
+  const tx = bx + lean * h, ty = by - h;
+  x.strokeStyle = col; x.lineWidth = Math.max(3, h * .035); x.lineCap = 'round';
+  x.beginPath(); x.moveTo(bx, by); x.quadraticCurveTo(bx + lean * h * .15, by - h * .6, tx, ty); x.stroke();
+  x.fillStyle = col;
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i - 4.5) * .4 + rnd(-.1, .1), L = h * rnd(.35, .5);
+    const ex = tx + Math.cos(a) * L, ey = ty + Math.sin(a) * L * .5 + L * .4 * Math.abs(Math.cos(a));
+    x.beginPath(); x.moveTo(tx, ty);
+    x.quadraticCurveTo(tx + Math.cos(a) * L * .5, ty + Math.sin(a) * L * .5 - L * .18, ex, ey);
+    x.quadraticCurveTo(tx + Math.cos(a) * L * .5 + 3, ty + Math.sin(a) * L * .5 - L * .06, tx, ty);
+    x.fill();
+  }
+}
+function spiky(x, bx, by, h, n, col) {
+  x.fillStyle = col;
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + rnd(-1.25, 1.25), L = h * rnd(.45, 1), w = h * .045;
+    const ex = bx + Math.cos(a) * L, ey = by + Math.sin(a) * L;
+    x.beginPath(); x.moveTo(bx - w, by);
+    x.quadraticCurveTo((bx + ex) / 2 - w, (by + ey) / 2, ex, ey);
+    x.quadraticCurveTo((bx + ex) / 2 + w, (by + ey) / 2, bx + w, by);
+    x.fill();
+  }
+}
+
+function drawHotelLayer(lit) {
+  const margin = W * .04, w = W + margin * 2;
+  const [c, x] = E.off(w, H);
+  const L = { c, w, margin, depth: .5 };
+  if (!lit) hWins = [];
+  x.translate(margin, 0);
+  const gy = H * .8, floorH = H * .085;
+  const winW = Math.max(11, Math.min(24, W * .017)), winH = winW * 1.35, gap = winW * .85;
+  const stone = (y0, y1) => { const g = x.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, '#3b4360'); g.addColorStop(1, '#171b28'); return g; };
+  const warm = (wx, wy, ww, wh, bright) => {
+    const g = x.createLinearGradient(0, wy, 0, wy + wh);
+    g.addColorStop(0, bright ? '#fff0c4' : '#ffd68a'); g.addColorStop(1, '#ff9f3d');
+    x.save(); x.shadowColor = 'rgba(255,190,100,.9)'; x.shadowBlur = 16;
+    x.fillStyle = g; x.fillRect(wx, wy, ww, wh); x.restore();
+    x.fillStyle = 'rgba(60,35,15,.55)';
+    x.fillRect(wx + ww / 2 - .75, wy, 1.5, wh); x.fillRect(wx, wy + wh * .45, ww, 1.5);
+  };
+  // every guest window is drawn lit in the lit pass and dark in the dark pass (same random sequence both times)
+  const windows = (bx, bw, top, bottom, minX) => {
+    for (let wy = top + floorH * .3; wy + winH < bottom; wy += floorH) {
+      for (let wx = bx + gap; wx + winW < bx + bw - gap * .5; wx += winW + gap) {
+        const r1 = Math.random(), r2 = Math.random();
+        if (minX && wx < minX) continue;
+        if (lit) warm(wx, wy, winW, winH, r2 < .2);
+        else {
+          x.fillStyle = '#121725'; x.fillRect(wx, wy, winW, winH); x.fillStyle = 'rgba(140,170,230,.12)'; x.fillRect(wx, wy, winW, winH * .3);
+          hWins.push({ x: wx + margin, y: wy, w: winW, h: winH, on: r1 < .5 });
+        }
+      }
+    }
+  };
+  const block = (bx, by, bw, withGround, minX) => {
+    x.fillStyle = stone(by, gy); x.fillRect(bx, by, bw, gy - by);
+    x.fillStyle = '#4c5577'; x.fillRect(bx - 8, by - 7, bw + 16, 11);            // cornice
+    x.fillStyle = 'rgba(190,210,255,.25)'; x.fillRect(bx - 8, by - 7, bw + 16, 2);
+    for (let px = bx + bw * .08; px < bx + bw; px += bw / 6) {                  // pilasters
+      x.fillStyle = 'rgba(90,100,135,.35)'; x.fillRect(px, by + 4, 5, gy - by - 4);
+    }
+    windows(bx, bw, by, withGround ? gy - floorH * .6 : gy - floorH * 1.4, minX);
+  };
+
+  block(W * .79, H * .47, W * .25, true);           // right wing
+  block(W * .3, H * .3, W * .53, false, W * .365);  // main block (skip windows hidden behind the pavilion)
+  // hanging vines
+  x.strokeStyle = 'rgba(46,90,62,.8)'; x.lineWidth = 1.4;
+  for (let i = 0; i < 26; i++) {
+    const vx = rnd(W * .31, W * .82), vl = rnd(12, 60);
+    x.beginPath(); x.moveTo(vx, H * .3); x.quadraticCurveTo(vx + rnd(-6, 6), H * .3 + vl * .5, vx + rnd(-4, 4), H * .3 + vl); x.stroke();
+  }
+  // ground floor of main block: warm arcade windows
+  const ex = W * .565;
+  for (let ax = W * .32; ax < W * .82; ax += W * .055) {
+    if (Math.abs(ax + W * .015 - ex) < W * .09) continue;
+    warm(ax, gy - H * .115, W * .03, H * .085, Math.random() < .4);
+  }
+  block(W * .13, H * .42, W * .2, true);            // left pavilion
+  // pavilion's sweeping roof
+  const rg = x.createLinearGradient(0, H * .25, 0, H * .43);
+  rg.addColorStop(0, '#343b52'); rg.addColorStop(1, '#141824');
+  x.fillStyle = rg;
+  x.beginPath(); x.moveTo(W * .1, H * .43);
+  x.quadraticCurveTo(W * .17, H * .41, W * .215, H * .26); x.lineTo(W * .245, H * .26);
+  x.quadraticCurveTo(W * .29, H * .41, W * .36, H * .43); x.closePath(); x.fill();
+  x.strokeStyle = 'rgba(180,200,240,.35)'; x.lineWidth = 1.5;
+  x.beginPath(); x.moveTo(W * .1, H * .43); x.quadraticCurveTo(W * .17, H * .41, W * .215, H * .26); x.stroke();
+
+  // grand entrance: glowing doors, curved canopy, steps
+  x.save(); x.globalCompositeOperation = 'lighter';
+  const eg = x.createRadialGradient(ex, gy - H * .05, 0, ex, gy - H * .05, W * .17);
+  eg.addColorStop(0, 'rgba(255,200,120,.45)'); eg.addColorStop(1, 'rgba(255,200,120,0)');
+  x.fillStyle = eg; x.fillRect(ex - W * .2, gy - H * .3, W * .4, H * .5); x.restore();
+  const dg = x.createLinearGradient(0, gy - H * .125, 0, gy);
+  dg.addColorStop(0, '#fff3d0'); dg.addColorStop(1, '#ffb45a');
+  x.save(); x.shadowColor = 'rgba(255,200,120,1)'; x.shadowBlur = 30;
+  x.fillStyle = dg; x.fillRect(ex - W * .055, gy - H * .125, W * .11, H * .125); x.restore();
+  x.fillStyle = 'rgba(90,55,20,.5)';
+  for (let d = -2; d <= 2; d++) x.fillRect(ex + d * W * .022 - 1, gy - H * .125, 2, H * .125);
+  x.fillStyle = '#2a3043'; x.fillRect(ex - W * .075, gy - H * .14, W * .015, H * .14); x.fillRect(ex + W * .06, gy - H * .14, W * .015, H * .14);
+  x.fillStyle = '#262c3e'; x.beginPath(); x.ellipse(ex, gy - H * .135, W * .115, H * .038, 0, 0, 6.29); x.fill();
+  const cg = x.createLinearGradient(0, gy - H * .19, 0, gy - H * .14);
+  cg.addColorStop(0, '#6a739a'); cg.addColorStop(1, '#3a4260');
+  x.fillStyle = cg; x.beginPath(); x.ellipse(ex, gy - H * .152, W * .115, H * .035, 0, 0, 6.29); x.fill();
+  x.fillStyle = 'rgba(255,220,160,.8)'; x.fillRect(ex - W * .07, gy - H * .128, W * .14, 2);       // light strip under canopy
+  for (let i = 0; i < 5; i++) {
+    const sy = gy + i * H * .008, sw = W * (.13 + i * .025);
+    x.fillStyle = i % 2 ? '#2b3145' : '#3b4259'; x.fillRect(ex - sw / 2, sy, sw, H * .008);
+    x.fillStyle = 'rgba(255,200,130,.18)'; x.fillRect(ex - sw / 2, sy, sw, 1);
+  }
+  // palms flanking the entrance
+  palm(x, W * .7, gy + H * .01, H * .3, .12, '#0e1d15');
+  palm(x, W * .43, gy + H * .01, H * .22, -.14, '#0e1d15');
+
+  // stone plaza with warm reflections
+  const pg = x.createLinearGradient(0, gy + H * .04, 0, H);
+  pg.addColorStop(0, '#222a3d'); pg.addColorStop(1, '#0a0d15');
+  x.fillStyle = pg; x.fillRect(-margin, gy + H * .04, w, H);
+  x.save(); x.globalCompositeOperation = 'lighter';
+  const rf = x.createRadialGradient(ex, gy + H * .1, 0, ex, gy + H * .1, W * .3);
+  rf.addColorStop(0, 'rgba(255,190,110,.22)'); rf.addColorStop(1, 'rgba(255,190,110,0)');
+  x.fillStyle = rf; x.fillRect(ex - W * .35, gy, W * .7, H * .3); x.restore();
+  x.strokeStyle = 'rgba(255,255,255,.035)'; x.lineWidth = 1;
+  for (let i = 1; i < 7; i++) { x.beginPath(); x.ellipse(ex, H * 1.1, W * .12 * i, H * .06 * i, 0, Math.PI, 2 * Math.PI); x.stroke(); }
+  // garden bushes along the building
+  for (const bxp of [.16, .27, .38, .76, .86]) spiky(x, W * bxp, gy + H * .045, H * .09, 16, '#10241a');
+  return L;
+}
+
+// Two copies of the hotel (all windows dark / all lit); each window fades between them on its own schedule.
+function buildHotel() {
+  const seeded = (s0) => { let v = s0; return () => { v = (v * 16807) % 2147483647; return (v - 1) / 2147483646; }; };
+  const orig = Math.random, seed = 1 + Math.floor(orig() * 2e9);
+  let dark, lit;
+  try {
+    Math.random = seeded(seed); dark = drawHotelLayer(false);
+    Math.random = seeded(seed); lit = drawHotelLayer(true);
+  } finally { Math.random = orig; }
+  hotelLit = lit.c;
+  for (const wn of hWins) { wn.level = wn.on ? 1 : 0; wn.next = E.t + rnd(2, 30); }
+  return dark;
+}
+
+function buildHotelFore() {
+  const [c, x] = E.off(W, H);
+  hLamps = [];
+  spiky(x, W * .06, H * 1.03, H * .3, 40, '#07120c');
+  spiky(x, W * .28, H * 1.04, H * .16, 22, '#081510');
+  spiky(x, W * .88, H * 1.03, H * .32, 42, '#07120c');
+  spiky(x, W * .58, H * 1.05, H * .13, 18, '#081510');
+  for (const [lxp, lyp] of [[.21, .885], [.46, .865], [.76, .875], [.95, .93]]) {
+    const lx0 = W * lxp, ly0 = H * lyp;
+    x.fillStyle = '#0b0f17'; x.fillRect(lx0 - 1.5, ly0, 3, H * .06);
+    x.fillStyle = '#1b2233'; x.fillRect(lx0 - 5, ly0 - 4, 10, 8);
+    hLamps.push({ x: lx0, y: ly0, ph: rnd(0, 6.28) });
+  }
+  flies = [];
+  for (let i = 0; i < 55; i++) {
+    flies.push({ x: rnd(0, W), y: rnd(H * .55, H * .98), ph: rnd(0, 6.28), sp: rnd(.6, 2), dx: rnd(-12, 12), front: Math.random() < .4 });
+  }
+  return c;
+}
+
+function launchVolley() {
+  // four big stars fall together
+  const ang = rnd(1.1, 1.25), sp = rnd(480, 600);
+  const bx = rnd(W * .25, W * .6), by = rnd(-H * .06, H * .04);
+  for (let i = 0; i < 4; i++) {
+    shooters.push({ x: bx + i * W * .085 + rnd(-15, 15), y: by + rnd(-H * .03, H * .05), vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      life: -i * .12, max: rnd(.8, 1.1), len: rnd(140, 220), big: true });
+  }
+}
+function drawShooters(t, dt) {
+  const ctx = E.ctx;
+  if (t > nextVolley) { launchVolley(); nextVolley = t + rnd(12, 20); }
+  if (t > nextSingle) {
+    // tiny shooting stars, often
+    const ang = rnd(.45, 1.25) * (Math.random() < .3 ? -1 : 1) + (Math.random() < .3 ? Math.PI : 0), sp = rnd(550, 900);
+    shooters.push({ x: rnd(W * .05, W * .95), y: rnd(0, H * .35), vx: Math.cos(ang) * sp, vy: Math.abs(Math.sin(ang)) * sp, life: 0, max: rnd(.2, .45), len: rnd(25, 70), big: false });
+    nextSingle = t + rnd(.6, 2.2);
+  }
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  for (let i = shooters.length - 1; i >= 0; i--) {
+    const s = shooters[i];
+    s.life += dt;
+    if (s.life < 0) continue;
+    if (s.life > s.max) { shooters.splice(i, 1); continue; }
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    const fade = Math.min(1, s.life * 6) * Math.min(1, (s.max - s.life) * 4);
+    const L = s.len * Math.min(1, s.life * 3), sp = Math.hypot(s.vx, s.vy);
+    const tx = s.x - s.vx / sp * L, ty = s.y - s.vy / sp * L;
+    const g = ctx.createLinearGradient(tx, ty, s.x, s.y);
+    g.addColorStop(0, 'rgba(160,200,255,0)'); g.addColorStop(1, `rgba(235,245,255,${fade})`);
+    ctx.strokeStyle = g; ctx.lineWidth = s.big ? 2.4 : .9;
+    ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(s.x, s.y); ctx.stroke();
+    if (s.big) {
+      const hg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, 14);
+      hg.addColorStop(0, `rgba(255,255,255,${fade})`); hg.addColorStop(.3, `rgba(150,200,255,${fade * .6})`); hg.addColorStop(1, 'rgba(120,170,255,0)');
+      ctx.fillStyle = hg; ctx.fillRect(s.x - 14, s.y - 14, 28, 28);
+      ctx.strokeStyle = `rgba(220,235,255,${fade * .7})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(s.x - 12, s.y); ctx.lineTo(s.x + 12, s.y); ctx.moveTo(s.x, s.y - 12); ctx.lineTo(s.x, s.y + 12); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawFlies(t, dt, front) {
+  const ctx = E.ctx;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (const f of flies) {
+    if (f.front !== front) continue;
+    f.x += (f.dx + Math.sin(t * .7 + f.ph) * 10) * dt;
+    if (f.x < -10) f.x = W + 10; if (f.x > W + 10) f.x = -10;
+    const y = f.y + Math.sin(t * f.sp + f.ph) * 8;
+    const a = Math.max(0, Math.sin(t * f.sp * 1.7 + f.ph)) * (front ? .9 : .6);
+    if (a < .02) continue;
+    const r = front ? 7 : 4;
+    const g = ctx.createRadialGradient(f.x, y, 0, f.x, y, r);
+    g.addColorStop(0, `rgba(255,240,160,${a})`); g.addColorStop(1, 'rgba(200,255,120,0)');
+    ctx.fillStyle = g; ctx.fillRect(f.x - r, y - r, r * 2, r * 2);
+  }
+  ctx.restore();
+}
+
+BanditTheme({
+  name: 'The Hotel',
+  grass: ['#1d3a28', '#06100a', '#030805'],
+
+  build(env) {
+    E = env; W = env.W; H = env.H;
+    shooters = [];
+    hSky = buildHotelSky();
+    layer = buildHotel();
+    hFore = buildHotelFore();
+    nextVolley = env.t + 1.2; nextSingle = env.t + 3;
+  },
+
+  drawBack(t, dt) {
+    const ctx = E.ctx, parX = E.parX, parY = E.parY;
+    ctx.drawImage(hSky, parX * .08, parY * .08, W, H);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const s of hStars) {
+      const a = .3 + .7 * (.5 + .5 * Math.sin(t * s.sp + s.ph));
+      const x = s.x + parX * .08, y = s.y + parY * .08;
+      ctx.fillStyle = `rgba(220,235,255,${a})`; ctx.beginPath(); ctx.arc(x, y, s.r, 0, 6.29); ctx.fill();
+      if (s.flare && a > .75) {
+        ctx.strokeStyle = `rgba(200,225,255,${(a - .75) * 2})`; ctx.lineWidth = .8;
+        ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
+      }
+    }
+    ctx.restore();
+    drawShooters(t, dt);
+
+    const ox = -layer.margin + parX * layer.depth, oy = parY * layer.depth;
+    ctx.drawImage(layer.c, ox, oy, layer.w, H);
+    // guests switching their lights on and off over time
+    const pad = 16, DPR = E.DPR;
+    for (const wn of hWins) {
+      if (t > wn.next) { wn.on = !wn.on; wn.next = t + rnd(8, 45); }
+      const target = wn.on ? 1 : 0;
+      wn.level += (target - wn.level) * Math.min(1, dt * (wn.on ? 5 : 2.5));
+      if (wn.level < .01) continue;
+      // a light switching on flickers briefly
+      const flick = wn.on && wn.level < .9 ? .6 + .4 * Math.random() : 1;
+      ctx.globalAlpha = Math.min(1, wn.level * flick);
+      ctx.drawImage(hotelLit, (wn.x - pad) * DPR, (wn.y - pad) * DPR, (wn.w + pad * 2) * DPR, (wn.h + pad * 2) * DPR,
+        wn.x - pad + ox, wn.y - pad + oy, wn.w + pad * 2, wn.h + pad * 2);
+    }
+    ctx.globalAlpha = 1;
+    drawFlies(t, dt, false);
+  },
+
+  drawFront(t, dt) {
+    const ctx = E.ctx;
+    ctx.drawImage(hFore, E.parX * 1.2, E.parY * 1.2, W, H);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const l of hLamps) {
+      const x = l.x + E.parX * 1.2, y = l.y + E.parY * 1.2, a = .55 + .08 * Math.sin(t * 2 + l.ph);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 46);
+      g.addColorStop(0, `rgba(255,235,180,${a})`); g.addColorStop(.25, `rgba(255,190,100,${a * .45})`); g.addColorStop(1, 'rgba(255,170,80,0)');
+      ctx.fillStyle = g; ctx.fillRect(x - 46, y - 46, 92, 92);
+      ctx.fillStyle = `rgba(255,250,225,${a + .3})`; ctx.fillRect(x - 3, y - 2, 6, 5);
+    }
+    ctx.restore();
+    drawFlies(t, dt, true);
+  },
+});
