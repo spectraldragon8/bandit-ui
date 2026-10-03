@@ -1,3 +1,4 @@
 ShadowClient : shadowclient : Training tools: damage numbers, HP display, hitboxes, cooldown timers, combo counter, dummy and map options. Press / in game for its menu.
 Community Costumes : ccostumes : Allows community costumes to be equipped. Made by Dokuro.
 Vivy : vivy : Enables custom songs to be used instead of the in-game tracks.
+I'm Feeling Lucky : packspin : Makes opening packs much more visually appealing.
